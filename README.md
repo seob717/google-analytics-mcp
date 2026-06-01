@@ -45,6 +45,29 @@ to provide several
 - `run_realtime_report`: Runs a Google Analytics realtime report using the
   Data API.
 
+## Quick start: Claude Desktop (macOS) 🚀
+
+Prefer one command over the manual steps below? On macOS with
+[Claude Desktop](https://claude.ai/download) and
+[Homebrew](https://brew.sh) installed, run:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/googleanalytics/google-analytics-mcp/main/scripts/setup-claude-desktop.sh -o /tmp/ga-mcp-setup.sh && bash /tmp/ga-mcp-setup.sh
+```
+
+The script installs the prerequisites (`pipx`, the Google Cloud SDK, and the
+`analytics-mcp` server), signs you in to Google, enables the required APIs,
+and adds the server to your Claude Desktop config — no manual JSON editing.
+You only need to click through the Google sign-in in your browser. Existing
+MCP servers in your config are preserved, and a timestamped backup is made
+before any change.
+
+When it finishes, fully quit and reopen Claude Desktop, then ask:
+`Show me my Google Analytics properties`.
+
+For other clients (Gemini CLI, Gemini Code Assist) or manual setup, follow the
+steps below.
+
 ## Setup instructions 🔧
 
 ✨ Watch the [Google Analytics MCP Setup
