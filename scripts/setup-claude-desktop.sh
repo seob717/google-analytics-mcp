@@ -133,13 +133,33 @@ gcloud config set project "$PROJECT" 1>/dev/null 2>&1 || true
 ok "프로젝트: $PROJECT"
 
 # --- 6. enable APIs -----------------------------------------------------------
-step "5/6 · 필요한 API 활성화"
-info "Analytics Admin API / Data API 활성화 중..."
-gcloud services enable \
-  analyticsadmin.googleapis.com \
-  analyticsdata.googleapis.com \
-  --project "$PROJECT"
-ok "API 활성화 완료"
+# Only the project owner/editor can enable APIs. For a shared project, an admin
+# enables them once; everyone else just needs them already on. So we check
+# first and skip the enable call when they're active — letting users without
+# the enable permission pass this step.
+step "5/6 · 필요한 API 확인"
+REQUIRED_APIS="analyticsadmin.googleapis.com analyticsdata.googleapis.com"
+ENABLED_APIS="$(gcloud services list --enabled --project "$PROJECT" \
+  --format="value(config.name)" 2>/dev/null || true)"
+MISSING_APIS=""
+for api in $REQUIRED_APIS; do
+  if printf '%s\n' "$ENABLED_APIS" | grep -qx "$api"; then
+    ok "$api (활성화됨)"
+  else
+    MISSING_APIS="$MISSING_APIS $api"
+  fi
+done
+if [ -n "${MISSING_APIS# }" ]; then
+  info "활성화 시도:${MISSING_APIS}"
+  # shellcheck disable=SC2086
+  if gcloud services enable $MISSING_APIS --project "$PROJECT" 2>/dev/null; then
+    ok "API 활성화 완료"
+  else
+    warn "이 계정에는 '$PROJECT' 프로젝트의 API를 활성화할 권한이 없습니다."
+    warn "관리자에게 아래 API 활성화를 한 번만 요청하세요:${MISSING_APIS}"
+    warn "관리자가 켜두면 이 단계는 자동으로 통과합니다. 일단 계속 진행합니다."
+  fi
+fi
 
 # --- 7. application default credentials ---------------------------------------
 info "앱용 인증(ADC) 설정 — 브라우저에서 한 번 더 로그인하세요."
