@@ -97,6 +97,16 @@ if [ ! -x "$GCLOUD" ] && ! command -v gcloud >/dev/null 2>&1; then
 fi
 ok "Google Cloud SDK 준비 완료 ($GCLOUD)"
 
+# gcloud는 Python 3.10–3.14가 필요한데 시스템 python3가 더 낮으면 실패한다.
+# 현재 gcloud가 못 도는 경우에만 uv로 호환 Python을 확보해 지정한다.
+if ! CLOUDSDK_CORE_DISABLE_PROMPTS=1 "$GCLOUD" version >/dev/null 2>&1; then
+  info "gcloud 실행용 Python 준비 중... (uv가 자동 설치)"
+  "$UV" python install 3.12 >/dev/null 2>&1 || true
+  CLOUDSDK_PYTHON="$("$UV" python find 3.12 2>/dev/null || true)"
+  export CLOUDSDK_PYTHON
+  [ -n "$CLOUDSDK_PYTHON" ] && ok "gcloud Python: $CLOUDSDK_PYTHON"
+fi
+
 # --- 3. analytics-mcp server (via uv) ----------------------------------------
 step "3/6 · Analytics MCP 서버 설치"
 info "analytics-mcp 설치/업데이트 중... (uv가 Python까지 자동 준비)"
