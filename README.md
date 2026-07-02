@@ -52,7 +52,7 @@ Prefer one command over the manual steps below? On macOS with
 [Homebrew](https://brew.sh) installed, run:
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/googleanalytics/google-analytics-mcp/main/scripts/setup-claude-desktop.sh -o /tmp/ga-mcp-setup.sh && bash /tmp/ga-mcp-setup.sh
+curl -fsSL https://raw.githubusercontent.com/seob717/google-analytics-mcp/feat/google-ads-mcp-setup/scripts/setup-claude-desktop.sh -o /tmp/ga-mcp-setup.sh && bash /tmp/ga-mcp-setup.sh
 ```
 
 The script installs the prerequisites (`pipx`, the Google Cloud SDK, and the
@@ -61,6 +61,14 @@ and adds the server to your Claude Desktop config — no manual JSON editing.
 You only need to click through the Google sign-in in your browser. Existing
 MCP servers in your config are preserved, and a timestamped backup is made
 before any change.
+
+The script also offers to set up the official read-only
+[Google Ads MCP server](https://github.com/googleads/google-ads-mcp)
+alongside. Answering `y` requires a
+[Google Ads developer token](https://developers.google.com/google-ads/api/docs/get-started/dev-token);
+to skip the prompts, run with `GA_MCP_WITH_ADS=1 GA_MCP_ADS_DEV_TOKEN=xxx`
+(and `GA_MCP_ADS_LOGIN_CUSTOMER_ID` when accessing accounts through a
+manager/MCC account).
 
 When it finishes, fully quit and reopen Claude Desktop, then ask:
 `Show me my Google Analytics properties`.
