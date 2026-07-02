@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# One-step setup for the Google Analytics MCP server on Claude Desktop (macOS).
+# One-step setup for the Google Analytics MCP server on Claude Desktop (macOS),
+# with an optional Google Ads MCP server (read-only, official googleads/google-ads-mcp).
 #
 # No Homebrew required. Uses `uv` (which also manages Python) to install and run
 # the server, installs the Google Cloud SDK if missing, signs you in to Google,
@@ -23,6 +24,9 @@
 # Usage:
 #   bash scripts/setup-claude-desktop.sh
 #   GA_MCP_PROJECT=my-gcp-project bash scripts/setup-claude-desktop.sh   # skip the project prompt
+#   GA_MCP_WITH_ADS=1 GA_MCP_ADS_DEV_TOKEN=xxx bash scripts/setup-claude-desktop.sh
+#     # also set up Google Ads MCP without prompts
+#     # (optional: GA_MCP_ADS_LOGIN_CUSTOMER_ID for access via a manager/MCC account)
 
 set -euo pipefail
 
@@ -51,6 +55,7 @@ ask() {
 }
 
 ANALYTICS_SCOPES="https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/cloud-platform"
+ADWORDS_SCOPE="https://www.googleapis.com/auth/adwords"
 CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 ADC_PATH="$HOME/.config/gcloud/application_default_credentials.json"
 
@@ -63,6 +68,38 @@ if [ "$(uname)" != "Darwin" ]; then
   err "이 스크립트는 macOS 전용입니다. (현재: $(uname))"
   exit 1
 fi
+
+# --- optional: Google Ads MCP ---------------------------------------------------
+# The official google-ads-mcp server is read-only. It needs a developer token,
+# which can only be issued manually in the Google Ads API Center — so we ask.
+WITH_ADS=0
+ADS_DEV_TOKEN="${GA_MCP_ADS_DEV_TOKEN:-}"
+ADS_LOGIN_CUSTOMER_ID="${GA_MCP_ADS_LOGIN_CUSTOMER_ID:-}"
+if [ "${GA_MCP_WITH_ADS:-}" = "1" ]; then
+  WITH_ADS=1
+else
+  echo ""
+  ask ADS_REPLY "Google Ads MCP도 함께 연결할까요? (읽기 전용, developer token 필요) [y/N]: "
+  case "$ADS_REPLY" in
+    [yY]*) WITH_ADS=1 ;;
+  esac
+fi
+if [ "$WITH_ADS" = "1" ] && [ -z "$ADS_DEV_TOKEN" ]; then
+  echo ""
+  info "Google Ads developer token이 필요합니다."
+  echo "  발급 위치: Google Ads 관리자 계정(MCC) → API 센터"
+  echo "  https://ads.google.com/aw/apicenter"
+  echo "  (Explorer access 수준이면 대부분 즉시 자동 승인됩니다)"
+  ask ADS_DEV_TOKEN "developer token을 붙여넣으세요 (건너뛰려면 Enter): "
+  if [ -z "$ADS_DEV_TOKEN" ]; then
+    warn "developer token이 없어 Google Ads 설정을 건너뜁니다. 발급 후 스크립트를 다시 실행하세요."
+    WITH_ADS=0
+  fi
+fi
+if [ "$WITH_ADS" = "1" ] && [ -z "$ADS_LOGIN_CUSTOMER_ID" ]; then
+  ask ADS_LOGIN_CUSTOMER_ID "MCC(관리자 계정)를 통해 접근한다면 관리자 고객 ID를 입력하세요 (직접 접근이면 Enter): "
+fi
+ADS_LOGIN_CUSTOMER_ID="${ADS_LOGIN_CUSTOMER_ID//-/}"
 
 # --- 1. uv (also provides Python) --------------------------------------------
 step "1/6 · 실행 도구 준비 (uv)"
@@ -107,8 +144,8 @@ if ! CLOUDSDK_CORE_DISABLE_PROMPTS=1 "$GCLOUD" version >/dev/null 2>&1; then
   [ -n "$CLOUDSDK_PYTHON" ] && ok "gcloud Python: $CLOUDSDK_PYTHON"
 fi
 
-# --- 3. analytics-mcp server (via uv) ----------------------------------------
-step "3/6 · Analytics MCP 서버 설치"
+# --- 3. MCP servers (via uv) ---------------------------------------------------
+step "3/6 · MCP 서버 설치"
 info "analytics-mcp 설치/업데이트 중... (uv가 Python까지 자동 준비)"
 "$UV" tool install analytics-mcp --quiet 2>/dev/null \
   || "$UV" tool upgrade analytics-mcp --quiet 2>/dev/null || true
@@ -121,7 +158,24 @@ if [ -z "$MCP_BIN" ] || [ ! -x "$MCP_BIN" ]; then
   err "'$UV tool install analytics-mcp' 를 직접 실행해 오류를 확인하세요."
   exit 1
 fi
-ok "서버 설치 완료 ($MCP_BIN)"
+ok "Analytics 서버 설치 완료 ($MCP_BIN)"
+
+ADS_MCP_BIN=""
+if [ "$WITH_ADS" = "1" ]; then
+  info "google-ads-mcp 설치/업데이트 중..."
+  "$UV" tool install google-ads-mcp --quiet 2>/dev/null \
+    || "$UV" tool upgrade google-ads-mcp --quiet 2>/dev/null || true
+  ADS_MCP_BIN="$HOME/.local/bin/google-ads-mcp"
+  if [ ! -x "$ADS_MCP_BIN" ]; then
+    ADS_MCP_BIN="$(command -v google-ads-mcp 2>/dev/null || true)"
+  fi
+  if [ -z "$ADS_MCP_BIN" ] || [ ! -x "$ADS_MCP_BIN" ]; then
+    err "google-ads-mcp 실행 파일을 찾을 수 없습니다."
+    err "'$UV tool install google-ads-mcp' 를 직접 실행해 오류를 확인하세요."
+    exit 1
+  fi
+  ok "Ads 서버 설치 완료 ($ADS_MCP_BIN)"
+fi
 
 # --- 4. Google sign-in & project ---------------------------------------------
 step "4/6 · Google 로그인 & 프로젝트"
@@ -159,6 +213,7 @@ ok "프로젝트: $PROJECT"
 # the enable permission pass this step.
 step "5/6 · 필요한 API 확인"
 REQUIRED_APIS="analyticsadmin.googleapis.com analyticsdata.googleapis.com"
+[ "$WITH_ADS" = "1" ] && REQUIRED_APIS="$REQUIRED_APIS googleads.googleapis.com"
 ENABLED_APIS="$("$GCLOUD" services list --enabled --project "$PROJECT" \
   --format="value(config.name)" 2>/dev/null || true)"
 MISSING_APIS=""
@@ -184,7 +239,11 @@ fi
 # --- 6. application default credentials + wire into Claude Desktop ------------
 step "6/6 · 인증 & Claude Desktop 연결"
 info "앱용 인증(ADC) 설정 — 브라우저에서 한 번 더 로그인하세요."
-"$GCLOUD" auth application-default login --scopes="$ANALYTICS_SCOPES"
+# ADC login overwrites the credentials file, so both servers share one ADC —
+# request the union of scopes in a single login.
+ADC_SCOPES="$ANALYTICS_SCOPES"
+[ "$WITH_ADS" = "1" ] && ADC_SCOPES="$ADC_SCOPES,$ADWORDS_SCOPE"
+"$GCLOUD" auth application-default login --scopes="$ADC_SCOPES"
 "$GCLOUD" auth application-default set-quota-project "$PROJECT" >/dev/null 2>&1 || \
   warn "quota project 설정을 건너뜁니다 ($PROJECT). 권한을 확인하세요."
 if [ ! -f "$ADC_PATH" ]; then
@@ -199,6 +258,8 @@ if [ -f "$CONFIG" ]; then
 fi
 
 MCP_BIN="$MCP_BIN" ADC_PATH="$ADC_PATH" PROJECT="$PROJECT" CONFIG="$CONFIG" \
+WITH_ADS="$WITH_ADS" ADS_MCP_BIN="$ADS_MCP_BIN" ADS_DEV_TOKEN="$ADS_DEV_TOKEN" \
+ADS_LOGIN_CUSTOMER_ID="$ADS_LOGIN_CUSTOMER_ID" \
 "$UV" run --no-project python - <<'PY'
 import json, os
 
@@ -223,17 +284,40 @@ data["mcpServers"]["analytics-mcp"] = {
     },
 }
 
+if os.environ.get("WITH_ADS") == "1":
+    ads_env = {
+        "GOOGLE_APPLICATION_CREDENTIALS": os.environ["ADC_PATH"],
+        "GOOGLE_PROJECT_ID": os.environ["PROJECT"],
+        "GOOGLE_ADS_DEVELOPER_TOKEN": os.environ["ADS_DEV_TOKEN"],
+    }
+    if os.environ.get("ADS_LOGIN_CUSTOMER_ID"):
+        ads_env["GOOGLE_ADS_LOGIN_CUSTOMER_ID"] = os.environ["ADS_LOGIN_CUSTOMER_ID"]
+    data["mcpServers"]["google-ads-mcp"] = {
+        "command": os.environ["ADS_MCP_BIN"],
+        "args": [],
+        "env": ads_env,
+    }
+
 with open(cfg, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-ok "Claude Desktop 설정에 analytics-mcp 추가 완료"
+if [ "$WITH_ADS" = "1" ]; then
+  ok "Claude Desktop 설정에 analytics-mcp, google-ads-mcp 추가 완료"
+else
+  ok "Claude Desktop 설정에 analytics-mcp 추가 완료"
+fi
 
 # --- done ---------------------------------------------------------------------
 printf '\n%s설치가 끝났습니다 🎉%s\n' "$C_GREEN$C_BOLD" "$C_OFF"
 echo "다음 단계:"
 echo "  1. Claude Desktop을 완전히 종료했다가 다시 실행하세요."
 echo "  2. 새 대화에서 이렇게 물어보세요:  내 Google Analytics 속성 목록을 보여줘"
+if [ "$WITH_ADS" = "1" ]; then
+  echo "     Google Ads도 물어보세요:      내가 접근할 수 있는 Google Ads 계정 보여줘"
+  echo ""
+  echo "참고: developer token은 아래 설정 파일에 평문으로 저장됩니다."
+fi
 echo ""
 echo "문제가 있으면 Claude Desktop 설정 파일을 확인하세요:"
 echo "  $CONFIG"
