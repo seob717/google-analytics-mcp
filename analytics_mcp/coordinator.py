@@ -35,6 +35,12 @@ from analytics_mcp.tools.admin.info import (
     get_property_details,
     list_property_annotations,
 )
+from analytics_mcp.tools.admin.config import (
+    list_data_streams,
+    get_data_stream,
+    get_global_site_tag,
+    search_change_history_events,
+)
 from analytics_mcp.tools.reporting.core import (
     run_report,
     _run_report_description,
@@ -58,13 +64,9 @@ from analytics_mcp.tools.reporting.conversions import (
 run_report_with_description = FunctionTool(run_report)
 run_report_with_description.description = _run_report_description()
 run_realtime_report_with_description = FunctionTool(run_realtime_report)
-run_realtime_report_with_description.description = (
-    _run_realtime_report_description()
-)
+run_realtime_report_with_description.description = _run_realtime_report_description()
 run_funnel_report_with_description = FunctionTool(run_funnel_report)
-run_funnel_report_with_description.description = (
-    _run_funnel_report_description()
-)
+run_funnel_report_with_description.description = _run_funnel_report_description()
 run_conversions_report_with_description = FunctionTool(run_conversions_report)
 run_conversions_report_with_description.description = (
     _run_conversions_report_description()
@@ -76,6 +78,10 @@ tools = [
     FunctionTool(list_google_ads_links),
     FunctionTool(get_property_details),
     FunctionTool(list_property_annotations),
+    FunctionTool(list_data_streams),
+    FunctionTool(get_data_stream),
+    FunctionTool(get_global_site_tag),
+    FunctionTool(search_change_history_events),
     FunctionTool(get_custom_dimensions_and_metrics),
     run_report_with_description,
     run_realtime_report_with_description,
@@ -182,7 +188,5 @@ async def call_mcp_tool(name: str, arguments: dict) -> list[mcp_types.Content]:
             )
             return [mcp_types.TextContent(type="text", text=error_text)]
 
-    error_text = json.dumps(
-        {"error": f"Tool '{name}' not implemented by this server."}
-    )
+    error_text = json.dumps({"error": f"Tool '{name}' not implemented by this server."})
     return [mcp_types.TextContent(type="text", text=error_text)]
