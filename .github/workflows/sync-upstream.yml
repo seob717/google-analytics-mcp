@@ -1,0 +1,66 @@
+name: Sync upstream (weekly PR)
+
+# Weekly checks googleanalytics/google-analytics-mcp for new commits and opens a
+# PR merging them into the install branch. Your admin-tool commits stay; Google's
+# updates come in. Resolve conflicts (if any) in the PR. Runs from the default
+# branch (a scheduled workflow only fires from the repo's default branch).
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  BASE_BRANCH: feat/google-ads-mcp-setup
+  UPSTREAM_URL: https://github.com/googleanalytics/google-analytics-mcp.git
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCH: sync-upstream
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch upstream "$UPSTREAM_BRANCH"
+
+      - name: Skip if already up to date
+        id: check
+        run: |
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" "origin/$BASE_BRANCH"; then
+            echo "Fork's $BASE_BRANCH already contains upstream/$UPSTREAM_BRANCH — nothing to sync."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push upstream snapshot branch
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git branch -f "$SYNC_BRANCH" "upstream/$UPSTREAM_BRANCH"
+          git push -f origin "$SYNC_BRANCH"
+
+      - name: Open PR if none is open
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing="$(gh pr list --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -z "$existing" ]; then
+            gh pr create \
+              --base "$BASE_BRANCH" --head "$SYNC_BRANCH" \
+              --title "Sync upstream → $BASE_BRANCH" \
+              --body "Automated weekly sync of \`googleanalytics/google-analytics-mcp@$UPSTREAM_BRANCH\`. Merge to bring Google's latest into the fork — your admin tools stay. If GitHub flags conflicts, resolve them in this PR, then re-run \`setup.sh\` (or \`uv tool upgrade analytics-mcp\`) locally to pick up the update."
+          else
+            echo "Open sync PR #$existing already exists — updated by the force-push above."
+          fi
