@@ -16,8 +16,11 @@
 
 These complement the reporting tools by exposing property configuration that
 the Data API can't see: data stream setup, the per-stream gtag snippet, and the
-Change History (who changed what, and when). All are read-only and work with the
-existing analytics.readonly scope.
+Change History (who changed what, and when). All are read-only.
+
+Scopes: data stream reads work with analytics.readonly, but the Admin API gates
+search_change_history_events behind the broader analytics.edit scope — so change
+history needs analytics.edit in the ADC credentials (even though we only read).
 
 Note: "connected site tags" are intentionally absent — the GA4 Admin API exposes
 no method for them, so they can only be inspected in the GA4 Admin UI.
