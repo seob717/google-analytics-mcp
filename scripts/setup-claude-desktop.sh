@@ -30,6 +30,9 @@
 #   GA_MCP_WITH_ADS=1 GA_MCP_ADS_DEV_TOKEN=xxx bash scripts/setup-claude-desktop.sh
 #     # also set up Google Ads MCP without prompts
 #     # (optional: GA_MCP_ADS_LOGIN_CUSTOMER_ID for access via a manager/MCC account)
+#   GA_MCP_WITH_GTM=1 bash scripts/setup-claude-desktop.sh
+#     # also set up the Google Tag Manager MCP server (read + write)
+#     # (optional: GTM_MCP_ALLOW_DESTRUCTIVE=1 to allow delete/publish)
 
 set -euo pipefail
 
@@ -90,6 +93,10 @@ choose_checkbox() {
 
 ANALYTICS_SCOPES="https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/cloud-platform"
 ADWORDS_SCOPE="https://www.googleapis.com/auth/adwords"
+GTM_SCOPES="https://www.googleapis.com/auth/tagmanager.readonly,https://www.googleapis.com/auth/tagmanager.edit.containers,https://www.googleapis.com/auth/tagmanager.edit.containerversions,https://www.googleapis.com/auth/tagmanager.publish"
+# The GTM MCP server lives in this fork (not on PyPI yet). Change this one line
+# when gtm-mcp moves to its own repository.
+GTM_INSTALL_SOURCE="git+https://github.com/seob717/google-analytics-mcp.git@feat/google-ads-mcp-setup#subdirectory=gtm-mcp"
 CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 ADC_PATH="$HOME/.config/gcloud/application_default_credentials.json"
 
@@ -172,6 +179,27 @@ if [ "$WITH_ADS" = "1" ] && [ -z "$ADS_LOGIN_CUSTOMER_ID" ]; then
 fi
 ADS_LOGIN_CUSTOMER_ID="${ADS_LOGIN_CUSTOMER_ID//-/}"
 
+# --- optional: Google Tag Manager MCP -----------------------------------------
+# The GTM server supports read + write. Delete/publish stay disabled unless the
+# operator opts in with GTM_MCP_ALLOW_DESTRUCTIVE=1.
+WITH_GTM=0
+GTM_ALLOW_DESTRUCTIVE="${GTM_MCP_ALLOW_DESTRUCTIVE:-}"
+if [ "${GA_MCP_WITH_GTM:-}" = "1" ]; then
+  WITH_GTM=1
+else
+  echo ""
+  ask GTM_REPLY "Google Tag Manager MCP도 함께 연결할까요? (읽기+쓰기) [y/N]: "
+  case "$GTM_REPLY" in
+    [yY]*) WITH_GTM=1 ;;
+  esac
+fi
+if [ "$WITH_GTM" = "1" ] && [ -z "$GTM_ALLOW_DESTRUCTIVE" ]; then
+  ask GTM_DESTRUCTIVE_REPLY "삭제·publish 같은 위험한 쓰기도 허용할까요? (기본: 비허용) [y/N]: "
+  case "$GTM_DESTRUCTIVE_REPLY" in
+    [yY]*) GTM_ALLOW_DESTRUCTIVE=1 ;;
+  esac
+fi
+
 # --- 1. uv (also provides Python) --------------------------------------------
 step "1/6 · 실행 도구 준비 (uv)"
 if ! command -v uv >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/uv" ]; then
@@ -248,6 +276,22 @@ if [ "$WITH_ADS" = "1" ]; then
   ok "Ads 서버 설치 완료 ($ADS_MCP_BIN)"
 fi
 
+GTM_MCP_BIN=""
+if [ "$WITH_GTM" = "1" ]; then
+  info "tagmanager-mcp 설치/업데이트 중... (이 포크의 git 소스에서)"
+  "$UV" tool install --force "$GTM_INSTALL_SOURCE" --quiet 2>/dev/null || true
+  GTM_MCP_BIN="$HOME/.local/bin/tagmanager-mcp"
+  if [ ! -x "$GTM_MCP_BIN" ]; then
+    GTM_MCP_BIN="$(command -v tagmanager-mcp 2>/dev/null || true)"
+  fi
+  if [ -z "$GTM_MCP_BIN" ] || [ ! -x "$GTM_MCP_BIN" ]; then
+    err "tagmanager-mcp 실행 파일을 찾을 수 없습니다."
+    err "'$UV tool install --force \"$GTM_INSTALL_SOURCE\"' 를 직접 실행해 오류를 확인하세요."
+    exit 1
+  fi
+  ok "Tag Manager 서버 설치 완료 ($GTM_MCP_BIN)"
+fi
+
 # --- 4. Google sign-in & project ---------------------------------------------
 step "4/6 · Google 로그인 & 프로젝트"
 if ! "$GCLOUD" auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q .; then
@@ -285,6 +329,7 @@ ok "프로젝트: $PROJECT"
 step "5/6 · 필요한 API 확인"
 REQUIRED_APIS="analyticsadmin.googleapis.com analyticsdata.googleapis.com"
 [ "$WITH_ADS" = "1" ] && REQUIRED_APIS="$REQUIRED_APIS googleads.googleapis.com"
+[ "$WITH_GTM" = "1" ] && REQUIRED_APIS="$REQUIRED_APIS tagmanager.googleapis.com"
 ENABLED_APIS="$("$GCLOUD" services list --enabled --project "$PROJECT" \
   --format="value(config.name)" 2>/dev/null || true)"
 MISSING_APIS=""
@@ -314,6 +359,7 @@ info "앱용 인증(ADC) 설정 — 브라우저에서 한 번 더 로그인하�
 # request the union of scopes in a single login.
 ADC_SCOPES="$ANALYTICS_SCOPES"
 [ "$WITH_ADS" = "1" ] && ADC_SCOPES="$ADC_SCOPES,$ADWORDS_SCOPE"
+[ "$WITH_GTM" = "1" ] && ADC_SCOPES="$ADC_SCOPES,$GTM_SCOPES"
 "$GCLOUD" auth application-default login --scopes="$ADC_SCOPES"
 "$GCLOUD" auth application-default set-quota-project "$PROJECT" >/dev/null 2>&1 || \
   warn "quota project 설정을 건너뜁니다 ($PROJECT). 권한을 확인하세요."
@@ -328,7 +374,9 @@ SERVERS_JSON="$(mktemp)"
 trap 'rm -f "$SERVERS_JSON"' EXIT
 MCP_BIN="$MCP_BIN" ADC_PATH="$ADC_PATH" PROJECT="$PROJECT" \
 WITH_ADS="$WITH_ADS" ADS_MCP_BIN="$ADS_MCP_BIN" ADS_DEV_TOKEN="$ADS_DEV_TOKEN" \
-ADS_LOGIN_CUSTOMER_ID="$ADS_LOGIN_CUSTOMER_ID" SERVERS_JSON="$SERVERS_JSON" \
+ADS_LOGIN_CUSTOMER_ID="$ADS_LOGIN_CUSTOMER_ID" \
+WITH_GTM="$WITH_GTM" GTM_MCP_BIN="$GTM_MCP_BIN" GTM_ALLOW_DESTRUCTIVE="$GTM_ALLOW_DESTRUCTIVE" \
+SERVERS_JSON="$SERVERS_JSON" \
 "$UV" run --no-project python - <<'PY'
 import json, os
 
@@ -356,12 +404,26 @@ if os.environ.get("WITH_ADS") == "1":
         "env": ads_env,
     }
 
+if os.environ.get("WITH_GTM") == "1":
+    gtm_env = {
+        "GOOGLE_APPLICATION_CREDENTIALS": os.environ["ADC_PATH"],
+        "GOOGLE_CLOUD_PROJECT": os.environ["PROJECT"],
+    }
+    if os.environ.get("GTM_ALLOW_DESTRUCTIVE") == "1":
+        gtm_env["GTM_MCP_ALLOW_DESTRUCTIVE"] = "1"
+    servers["tagmanager-mcp"] = {
+        "command": os.environ["GTM_MCP_BIN"],
+        "args": [],
+        "env": gtm_env,
+    }
+
 with open(os.environ["SERVERS_JSON"], "w") as f:
     json.dump(servers, f)
 PY
 
 SERVER_NAMES="analytics-mcp"
-[ "$WITH_ADS" = "1" ] && SERVER_NAMES="analytics-mcp, google-ads-mcp"
+[ "$WITH_ADS" = "1" ] && SERVER_NAMES="$SERVER_NAMES, google-ads-mcp"
+[ "$WITH_GTM" = "1" ] && SERVER_NAMES="$SERVER_NAMES, tagmanager-mcp"
 
 # Claude Desktop: merge the servers into its config JSON.
 if [ "$TARGET_DESKTOP" = "1" ]; then
@@ -431,6 +493,14 @@ if [ "$WITH_ADS" = "1" ]; then
   echo "     Google Ads도 물어보세요:      내가 접근할 수 있는 Google Ads 계정 보여줘"
   echo ""
   echo "참고: developer token은 설정 파일에 평문으로 저장됩니다."
+fi
+if [ "$WITH_GTM" = "1" ]; then
+  echo "     Google Tag Manager도 물어보세요:  내 GTM 계정과 컨테이너 목록 보여줘"
+  if [ "$GTM_ALLOW_DESTRUCTIVE" = "1" ]; then
+    echo "     (삭제·publish 허용됨 — GTM_MCP_ALLOW_DESTRUCTIVE=1)"
+  else
+    echo "     (삭제·publish는 비활성. 켜려면 설정의 tagmanager-mcp env에 GTM_MCP_ALLOW_DESTRUCTIVE=1 추가)"
+  fi
 fi
 if [ "$TARGET_DESKTOP" = "1" ]; then
   echo ""

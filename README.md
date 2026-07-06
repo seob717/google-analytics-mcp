@@ -75,6 +75,11 @@ to skip the prompts, run with `GA_MCP_WITH_ADS=1 GA_MCP_ADS_DEV_TOKEN=xxx`
 (and `GA_MCP_ADS_LOGIN_CUSTOMER_ID` when accessing accounts through a
 manager/MCC account).
 
+It also offers the read + write
+[Google Tag Manager MCP server](gtm-mcp/README.md) (installed from this fork).
+Answer `y`, or pass `GA_MCP_WITH_GTM=1` to skip the prompt. Delete/publish stay
+disabled unless you opt in (`GTM_MCP_ALLOW_DESTRUCTIVE=1`).
+
 When it finishes, ask `Show me my Google Analytics properties`. If you set up
 Claude Desktop, fully quit and reopen it first; for the Claude Code CLI, run
 `claude mcp list` to confirm the server is registered.
