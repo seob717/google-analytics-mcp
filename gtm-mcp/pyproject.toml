@@ -1,0 +1,42 @@
+[project]
+name = "tagmanager-mcp"
+description = "MCP server for Google Tag Manager (read + write)"
+version = "0.1.0"
+# Lower bound of 3.10 due to the 'mcp' dependency.
+requires-python = ">=3.10"
+license = "Apache-2.0"
+readme = "README.md"
+dependencies = [
+    "google-auth~=2.40",
+    "google-api-python-client>=2.100.0",
+    "mcp>=1.24.0",
+    "google-adk>=1.29.0",
+]
+keywords = ["google tag manager", "gtm", "mcp", "tag manager"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Topic :: Internet",
+]
+
+[project.scripts]
+tagmanager-mcp = "tagmanager_mcp.server:run_server"
+
+[project.optional-dependencies]
+dev = ["black", "pytest", "pytest-asyncio"]
+
+[build-system]
+requires = ["setuptools>=82.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tagmanager_mcp*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
