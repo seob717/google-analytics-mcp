@@ -45,22 +45,27 @@ to provide several
 - `run_realtime_report`: Runs a Google Analytics realtime report using the
   Data API.
 
-## Quick start: Claude Desktop (macOS) 🚀
+## Quick start: Claude Desktop / Claude Code CLI (macOS) 🚀
 
 Prefer one command over the manual steps below? On macOS with
-[Claude Desktop](https://claude.ai/download) and
-[Homebrew](https://brew.sh) installed, run:
+[Claude Desktop](https://claude.ai/download) and/or the
+[Claude Code CLI](https://claude.ai/download) installed, run:
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/seob717/google-analytics-mcp/feat/google-ads-mcp-setup/scripts/setup-claude-desktop.sh -o /tmp/ga-mcp-setup.sh && bash /tmp/ga-mcp-setup.sh
 ```
 
-The script installs the prerequisites (`pipx`, the Google Cloud SDK, and the
-`analytics-mcp` server), signs you in to Google, enables the required APIs,
-and adds the server to your Claude Desktop config — no manual JSON editing.
-You only need to click through the Google sign-in in your browser. Existing
-MCP servers in your config are preserved, and a timestamped backup is made
-before any change.
+At the start the script asks which clients to set up — use `space` to toggle
+**Claude Desktop** and/or **Claude Code CLI**, then `Enter` to confirm. To skip
+the picker, pass `GA_MCP_TARGETS=desktop,cli` (either or both, comma-separated).
+
+The script installs the Google Cloud SDK and the `analytics-mcp` server, signs
+you in to Google, enables the required APIs, and wires the server into the
+clients you chose — no manual JSON editing. For Claude Desktop it edits the
+config file (existing MCP servers are preserved, with a timestamped backup);
+for the Claude Code CLI it registers the server at `user` scope via
+`claude mcp add-json`. You only need to click through the Google sign-in in
+your browser.
 
 The script also offers to set up the official read-only
 [Google Ads MCP server](https://github.com/googleads/google-ads-mcp)
@@ -70,8 +75,9 @@ to skip the prompts, run with `GA_MCP_WITH_ADS=1 GA_MCP_ADS_DEV_TOKEN=xxx`
 (and `GA_MCP_ADS_LOGIN_CUSTOMER_ID` when accessing accounts through a
 manager/MCC account).
 
-When it finishes, fully quit and reopen Claude Desktop, then ask:
-`Show me my Google Analytics properties`.
+When it finishes, ask `Show me my Google Analytics properties`. If you set up
+Claude Desktop, fully quit and reopen it first; for the Claude Code CLI, run
+`claude mcp list` to confirm the server is registered.
 
 For other clients (Gemini CLI, Gemini Code Assist) or manual setup, follow the
 steps below.

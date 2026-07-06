@@ -14,16 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# One-step setup for the Google Analytics MCP server on Claude Desktop (macOS),
-# with an optional Google Ads MCP server (read-only, official googleads/google-ads-mcp).
+# One-step setup for the Google Analytics MCP server on macOS, targeting
+# Claude Desktop and/or the Claude Code CLI, with an optional Google Ads MCP
+# server (read-only, official googleads/google-ads-mcp).
 #
 # No Homebrew required. Uses `uv` (which also manages Python) to install and run
 # the server, installs the Google Cloud SDK if missing, signs you in to Google,
-# enables the required APIs, and wires the server into Claude Desktop's config.
+# enables the required APIs, and wires the server into your chosen clients.
 #
 # Usage:
 #   bash scripts/setup-claude-desktop.sh
 #   GA_MCP_PROJECT=my-gcp-project bash scripts/setup-claude-desktop.sh   # skip the project prompt
+#   GA_MCP_TARGETS=desktop,cli bash scripts/setup-claude-desktop.sh
+#     # skip the target picker (values: desktop, cli — comma-separated)
 #   GA_MCP_WITH_ADS=1 GA_MCP_ADS_DEV_TOKEN=xxx bash scripts/setup-claude-desktop.sh
 #     # also set up Google Ads MCP without prompts
 #     # (optional: GA_MCP_ADS_LOGIN_CUSTOMER_ID for access via a manager/MCC account)
@@ -54,6 +57,37 @@ ask() {
   printf -v "$__var" '%s' "$__reply"
 }
 
+# Interactive checkbox selector driven from /dev/tty.
+# Caller sets CHECK_ITEMS (labels) and CHECK_STATE (0/1 defaults), same length.
+# ↑/↓ (or k/j) move, space toggles, Enter confirms. Updates CHECK_STATE in place.
+choose_checkbox() {
+  local prompt="$1" n=${#CHECK_ITEMS[@]} cur=0 key rest i mark pointer first=1
+  printf '%s\n' "$prompt" >/dev/tty
+  printf '  (↑/↓ 이동, space 토글, Enter 확정)\n' >/dev/tty
+  while true; do
+    if [ "$first" = "1" ]; then first=0; else printf '\033[%dA' "$n" >/dev/tty; fi
+    for i in $(seq 0 $((n - 1))); do
+      mark=' '; [ "${CHECK_STATE[$i]}" = "1" ] && mark='x'
+      pointer='  '; [ "$i" = "$cur" ] && pointer='> '
+      printf '\r\033[K%s[%s] %s\n' "$pointer" "$mark" "${CHECK_ITEMS[$i]}" >/dev/tty
+    done
+    IFS= read -rsn1 key </dev/tty
+    case "$key" in
+      '') break ;;
+      ' ') CHECK_STATE[cur]=$([ "${CHECK_STATE[cur]}" = "1" ] && echo 0 || echo 1) ;;
+      $'\033')
+        IFS= read -rsn2 -t 0.01 rest </dev/tty || true
+        case "$rest" in
+          '[A') cur=$(((cur - 1 + n) % n)) ;;
+          '[B') cur=$(((cur + 1) % n)) ;;
+        esac
+        ;;
+      k|K) cur=$(((cur - 1 + n) % n)) ;;
+      j|J) cur=$(((cur + 1) % n)) ;;
+    esac
+  done
+}
+
 ANALYTICS_SCOPES="https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/cloud-platform"
 ADWORDS_SCOPE="https://www.googleapis.com/auth/adwords"
 CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
@@ -66,6 +100,43 @@ echo "(Homebrew 없이 동작합니다)"
 # --- 0. platform check --------------------------------------------------------
 if [ "$(uname)" != "Darwin" ]; then
   err "이 스크립트는 macOS 전용입니다. (현재: $(uname))"
+  exit 1
+fi
+
+# --- target selection ---------------------------------------------------------
+# Where to install the MCP server(s): Claude Desktop, the Claude Code CLI, or both.
+TARGET_DESKTOP=0
+TARGET_CLI=0
+if [ -n "${GA_MCP_TARGETS:-}" ]; then
+  case ",$GA_MCP_TARGETS," in *,desktop,*) TARGET_DESKTOP=1 ;; esac
+  case ",$GA_MCP_TARGETS," in *,cli,*) TARGET_CLI=1 ;; esac
+elif [ -r /dev/tty ]; then
+  echo ""
+  CHECK_ITEMS=("Claude Desktop" "Claude Code CLI")
+  CHECK_STATE=(1 0)
+  choose_checkbox "설치할 대상을 선택하세요:"
+  TARGET_DESKTOP="${CHECK_STATE[0]}"
+  TARGET_CLI="${CHECK_STATE[1]}"
+else
+  TARGET_DESKTOP=1
+fi
+if [ "$TARGET_DESKTOP" = "0" ] && [ "$TARGET_CLI" = "0" ]; then
+  err "설치 대상이 선택되지 않았습니다."
+  exit 1
+fi
+
+# Claude Code CLI needs the `claude` binary. Skip that target if it's missing.
+CLAUDE_BIN=""
+if [ "$TARGET_CLI" = "1" ]; then
+  CLAUDE_BIN="$(command -v claude || true)"
+  if [ -z "$CLAUDE_BIN" ]; then
+    warn "'claude' CLI를 찾을 수 없어 Claude Code CLI 설정을 건너뜁니다."
+    warn "설치: https://claude.ai/download  또는  npm i -g @anthropic-ai/claude-code"
+    TARGET_CLI=0
+  fi
+fi
+if [ "$TARGET_DESKTOP" = "0" ] && [ "$TARGET_CLI" = "0" ]; then
+  err "설정할 대상이 없습니다."
   exit 1
 fi
 
@@ -236,8 +307,8 @@ if [ -n "${MISSING_APIS# }" ]; then
   fi
 fi
 
-# --- 6. application default credentials + wire into Claude Desktop ------------
-step "6/6 · 인증 & Claude Desktop 연결"
+# --- 6. application default credentials + wire into the selected clients ------
+step "6/6 · 인증 & MCP 연결"
 info "앱용 인증(ADC) 설정 — 브라우저에서 한 번 더 로그인하세요."
 # ADC login overwrites the credentials file, so both servers share one ADC —
 # request the union of scopes in a single login.
@@ -252,30 +323,17 @@ if [ ! -f "$ADC_PATH" ]; then
 fi
 ok "인증 설정 완료"
 
-if [ -f "$CONFIG" ]; then
-  cp "$CONFIG" "${CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
-  ok "기존 설정 백업 완료"
-fi
-
-MCP_BIN="$MCP_BIN" ADC_PATH="$ADC_PATH" PROJECT="$PROJECT" CONFIG="$CONFIG" \
+# Build the server definitions once; every selected client reuses them.
+SERVERS_JSON="$(mktemp)"
+trap 'rm -f "$SERVERS_JSON"' EXIT
+MCP_BIN="$MCP_BIN" ADC_PATH="$ADC_PATH" PROJECT="$PROJECT" \
 WITH_ADS="$WITH_ADS" ADS_MCP_BIN="$ADS_MCP_BIN" ADS_DEV_TOKEN="$ADS_DEV_TOKEN" \
-ADS_LOGIN_CUSTOMER_ID="$ADS_LOGIN_CUSTOMER_ID" \
+ADS_LOGIN_CUSTOMER_ID="$ADS_LOGIN_CUSTOMER_ID" SERVERS_JSON="$SERVERS_JSON" \
 "$UV" run --no-project python - <<'PY'
 import json, os
 
-cfg = os.environ["CONFIG"]
-os.makedirs(os.path.dirname(cfg), exist_ok=True)
-
-data = {}
-if os.path.exists(cfg):
-    try:
-        with open(cfg, "r") as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
-
-data.setdefault("mcpServers", {})
-data["mcpServers"]["analytics-mcp"] = {
+servers = {}
+servers["analytics-mcp"] = {
     "command": os.environ["MCP_BIN"],
     "args": [],
     "env": {
@@ -292,32 +350,90 @@ if os.environ.get("WITH_ADS") == "1":
     }
     if os.environ.get("ADS_LOGIN_CUSTOMER_ID"):
         ads_env["GOOGLE_ADS_LOGIN_CUSTOMER_ID"] = os.environ["ADS_LOGIN_CUSTOMER_ID"]
-    data["mcpServers"]["google-ads-mcp"] = {
+    servers["google-ads-mcp"] = {
         "command": os.environ["ADS_MCP_BIN"],
         "args": [],
         "env": ads_env,
     }
 
+with open(os.environ["SERVERS_JSON"], "w") as f:
+    json.dump(servers, f)
+PY
+
+SERVER_NAMES="analytics-mcp"
+[ "$WITH_ADS" = "1" ] && SERVER_NAMES="analytics-mcp, google-ads-mcp"
+
+# Claude Desktop: merge the servers into its config JSON.
+if [ "$TARGET_DESKTOP" = "1" ]; then
+  if [ -f "$CONFIG" ]; then
+    cp "$CONFIG" "${CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
+    ok "기존 Claude Desktop 설정 백업 완료"
+  fi
+  CONFIG="$CONFIG" SERVERS_JSON="$SERVERS_JSON" \
+  "$UV" run --no-project python - <<'PY'
+import json, os
+
+cfg = os.environ["CONFIG"]
+os.makedirs(os.path.dirname(cfg), exist_ok=True)
+
+data = {}
+if os.path.exists(cfg):
+    try:
+        with open(cfg, "r") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+
+with open(os.environ["SERVERS_JSON"], "r") as f:
+    servers = json.load(f)
+
+data.setdefault("mcpServers", {}).update(servers)
+
 with open(cfg, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-if [ "$WITH_ADS" = "1" ]; then
-  ok "Claude Desktop 설정에 analytics-mcp, google-ads-mcp 추가 완료"
-else
-  ok "Claude Desktop 설정에 analytics-mcp 추가 완료"
+  ok "Claude Desktop 설정에 $SERVER_NAMES 추가 완료"
+fi
+
+# Claude Code CLI: register each server at user scope (remove-then-add to overwrite).
+if [ "$TARGET_CLI" = "1" ]; then
+  while IFS=$'\t' read -r name cfgjson; do
+    [ -z "$name" ] && continue
+    "$CLAUDE_BIN" mcp remove -s user "$name" >/dev/null 2>&1 || true
+    if "$CLAUDE_BIN" mcp add-json -s user "$name" "$cfgjson" >/dev/null 2>&1; then
+      ok "Claude Code CLI에 $name 추가 완료 (user 스코프)"
+    else
+      err "Claude Code CLI에 $name 추가 실패 — 'claude mcp add-json -s user $name ...'를 직접 실행해 확인하세요."
+    fi
+  done < <(SERVERS_JSON="$SERVERS_JSON" "$UV" run --no-project python - <<'PY'
+import json, os
+with open(os.environ["SERVERS_JSON"], "r") as f:
+    servers = json.load(f)
+for name, cfg in servers.items():
+    print(name + "\t" + json.dumps(cfg))
+PY
+)
 fi
 
 # --- done ---------------------------------------------------------------------
 printf '\n%s설치가 끝났습니다 🎉%s\n' "$C_GREEN$C_BOLD" "$C_OFF"
 echo "다음 단계:"
-echo "  1. Claude Desktop을 완전히 종료했다가 다시 실행하세요."
-echo "  2. 새 대화에서 이렇게 물어보세요:  내 Google Analytics 속성 목록을 보여줘"
+if [ "$TARGET_DESKTOP" = "1" ]; then
+  echo "  • Claude Desktop을 완전히 종료했다가 다시 실행하세요."
+  echo "    새 대화에서:  내 Google Analytics 속성 목록을 보여줘"
+fi
+if [ "$TARGET_CLI" = "1" ]; then
+  echo "  • Claude Code CLI:  claude mcp list 로 등록을 확인하세요."
+  echo "    대화에서:  내 Google Analytics 속성 목록을 보여줘"
+fi
 if [ "$WITH_ADS" = "1" ]; then
   echo "     Google Ads도 물어보세요:      내가 접근할 수 있는 Google Ads 계정 보여줘"
   echo ""
-  echo "참고: developer token은 아래 설정 파일에 평문으로 저장됩니다."
+  echo "참고: developer token은 설정 파일에 평문으로 저장됩니다."
 fi
-echo ""
-echo "문제가 있으면 Claude Desktop 설정 파일을 확인하세요:"
-echo "  $CONFIG"
+if [ "$TARGET_DESKTOP" = "1" ]; then
+  echo ""
+  echo "문제가 있으면 Claude Desktop 설정 파일을 확인하세요:"
+  echo "  $CONFIG"
+fi
